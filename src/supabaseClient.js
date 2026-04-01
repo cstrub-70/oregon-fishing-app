@@ -20,42 +20,66 @@ export async function fetchNearestWaterBody(lat, lng) {
 }
 
 export async function fetchRegulationsForWater(waterBodyName) {
-  const today = new Date().toISOString().split('T')[0];
+  console.log('Fetching regs for:', waterBodyName);
 
-  const { data, error } = await supabase
-    .from('rules')
+  const { data: sections, error } = await supabase
+    .from('reg_sections')
     .select(`
-      species,
-      gear_allowed,
-      method,
-      bag_limit,
-      size_limit_inches,
-      catch_and_release_only,
-      season_open,
-      season_close,
-      notes,
-      reg_sections (
-        description,
-        water_bodies (
-          name,
-          type
-        )
+      description,
+      water_bodies (
+        name,
+        type
+      ),
+      rules (
+        species,
+        gear_allowed,
+        method,
+        bag_limit,
+        size_limit_inches,
+        catch_and_release_only,
+        season_open,
+        season_close,
+        notes,
+        year
       )
     `)
-    .eq('year', 2025)
-    .lte('season_open', today)
-    .gte('season_close', today);
+    .ilike('water_bodies.name', `%${waterBodyName.split(' ')[0]}%`);
+
+  console.log('Sections found:', sections?.length, sections);
 
   if (error) {
-    console.error('Supabase error full:', JSON.stringify(error));
+    console.error('Supabase error:', JSON.stringify(error));
     return [];
   }
 
-  const matched = (data || []).filter(rule => {
-    const wbName = rule.reg_sections?.water_bodies?.name || '';
-    return wbName.toLowerCase().includes(waterBodyName.toLowerCase()) ||
-           waterBodyName.toLowerCase().includes(wbName.toLowerCase());
-  });
+  if (!sections) return [];
 
-  return matched;
+  const now = new Date();
+  const rules = [];
+
+  for (const section of sections) {
+    if (!section.rules || section.rules.length === 0) continue;
+    console.log('Rules in section:', section.description, section.rules);
+    for (const rule of section.rules) {
+      if (!rule.season_open || !rule.season_close) continue;
+      const openDate = new Date(rule.season_open);
+      const closeDate = new Date(rule.season_close);
+      if (now >= openDate && now <= closeDate) {
+        rules.push(rule);
+      }
+    }
+  }
+
+  console.log('Matched rules:', rules.length);
+  const unique = [];
+const seen = new Set();
+for (const rule of rules) {
+  const key = `${rule.species}-${rule.gear_allowed?.join(',')}-${rule.bag_limit}`;
+  if (!seen.has(key)) {
+    seen.add(key);
+    unique.push(rule);
+  }
+}
+console.log('Unique rules:', unique.length);
+return unique;
 }
