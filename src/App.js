@@ -2,13 +2,14 @@ import { useState, useCallback, useEffect } from 'react';
 import mapboxgl from 'mapbox-gl';
 import Map, { Layer, Source, Popup } from 'react-map-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
-import { supabase } from './supabaseClient';
+import { fetchNearestWaterBody, fetchRegulationsForWater } from './supabaseClient';
 
 mapboxgl.accessToken = process.env.REACT_APP_MAPBOX_TOKEN;
 
 export default function App() {
   const [fishingMode, setFishingMode] = useState(false);
   const [popupInfo, setPopupInfo] = useState(null);
+  const [nearestWaters, setNearestWaters] = useState([]);
   const [regulations, setRegulations] = useState([]);
   const [loadingRegs, setLoadingRegs] = useState(false);
   const [cursor, setCursor] = useState('auto');
@@ -29,62 +30,36 @@ export default function App() {
     }
   }, []);
 
-  const fetchRegulations = async (waterBodyName) => {
+  const fetchWaterData = async (lat, lng) => {
     setLoadingRegs(true);
+    setNearestWaters([]);
     setRegulations([]);
 
-    const today = new Date().toISOString().split('T')[0];
+    const waters = await fetchNearestWaterBody(lat, lng);
+    setNearestWaters(waters);
 
-    const { data, error } = await supabase
-      .from('rules')
-      .select(`
-        species,
-        gear_allowed,
-        method,
-        bag_limit,
-        size_limit_inches,
-        catch_and_release_only,
-        season_open,
-        season_close,
-        notes,
-        reg_sections (
-          description,
-          water_bodies (
-            name
-          )
-        )
-      `)
-      .eq('year', 2025)
-      .lte('season_open', today)
-      .gte('season_close', today)
-      .ilike('reg_sections.water_bodies.name', `%${waterBodyName}%`);
-
-    if (error) {
-      console.error('Error fetching regulations:', error);
-    } else {
-      setRegulations(data || []);
+    if (waters.length > 0) {
+      const regs = await fetchRegulationsForWater(waters[0].name);
+      setRegulations(regs);
     }
+
     setLoadingRegs(false);
   };
 
   const onMapClick = useCallback((e) => {
     setPopupInfo(null);
+    setNearestWaters([]);
     setRegulations([]);
-    const features = e.features;
-    if (features && features.length > 0) {
-      const feature = features[0];
-      const name = feature.properties?.name || feature.properties?.Name || null;
-const displayName = name || `${feature.properties?.class || 'Waterway'} (zoom in for name)`;
-setTimeout(() => {
-  setPopupInfo({
-    longitude: e.lngLat.lng,
-    latitude: e.lngLat.lat,
-    name: displayName,
-          class: feature.properties?.class || feature.properties?.type || 'waterway',
-        });
-        if (fishingMode) fetchRegulations(name);
-      }, 0);
-    }
+
+    setTimeout(() => {
+      setPopupInfo({
+        longitude: e.lngLat.lng,
+        latitude: e.lngLat.lat,
+      });
+      if (fishingMode) {
+        fetchWaterData(e.lngLat.lat, e.lngLat.lng);
+      }
+    }, 0);
   }, [fishingMode]);
 
   const onMouseEnter = useCallback(() => setCursor('pointer'), []);
@@ -209,7 +184,7 @@ setTimeout(() => {
         initialViewState={{ longitude: -120.5, latitude: 44.0, zoom: 6 }}
         style={{ width: '100%', height: '100%' }}
         mapStyle="mapbox://styles/mapbox/outdoors-v12"
-        interactiveLayerIds={fishingMode ? ['waterways-fishing'] : ['waterways-explore']}
+        interactiveLayerIds={[]}
         onClick={onMapClick}
         onMouseEnter={onMouseEnter}
         onMouseLeave={onMouseLeave}
@@ -225,18 +200,15 @@ setTimeout(() => {
             longitude={popupInfo.longitude}
             latitude={popupInfo.latitude}
             anchor="bottom"
-            onClose={() => { setPopupInfo(null); setRegulations([]); }}
+            onClose={() => {
+              setPopupInfo(null);
+              setNearestWaters([]);
+              setRegulations([]);
+            }}
             closeOnClick={false}
             maxWidth="320px"
           >
             <div style={{ padding: '8px', fontFamily: 'sans-serif', minWidth: 200 }}>
-
-              <div style={{ fontWeight: 700, fontSize: 15, color: '#1e293b', marginBottom: 2 }}>
-                {popupInfo.name}
-              </div>
-              <div style={{ fontSize: 12, color: '#64748b', textTransform: 'capitalize', marginBottom: 10 }}>
-                {popupInfo.class}
-              </div>
 
               {!fishingMode && (
                 <div style={{ fontSize: 12, color: '#475569' }}>
@@ -245,40 +217,63 @@ setTimeout(() => {
               )}
 
               {fishingMode && loadingRegs && (
-                <div style={{ fontSize: 12, color: '#475569' }}>
-                  Loading regulations...
+                <div style={{ fontSize: 13, color: '#475569' }}>
+                  Finding nearest waterway...
                 </div>
               )}
 
-              {fishingMode && !loadingRegs && regulations.length === 0 && (
+              {fishingMode && !loadingRegs && nearestWaters.length === 0 && (
                 <div style={{ fontSize: 12, color: '#475569', background: '#f1f5f9', borderRadius: 6, padding: '6px 8px' }}>
-                  No regulation data for this water body yet
+                  No waterway found within 500m of this point
                 </div>
               )}
 
-              {fishingMode && !loadingRegs && regulations.length > 0 && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {regulations.map((rule, i) => (
-                    <div key={i} style={{
-                      background: rule.catch_and_release_only ? '#fef3c7' : '#f0fdf4',
-                      border: `1px solid ${rule.catch_and_release_only ? '#fcd34d' : '#86efac'}`,
-                      borderRadius: 8, padding: '8px 10px'
-                    }}>
-                      <div style={{ fontWeight: 600, fontSize: 13, color: '#1e293b', marginBottom: 4 }}>
-                        {rule.species}
-                      </div>
-                      <div style={{ fontSize: 12, color: '#475569', display: 'flex', flexDirection: 'column', gap: 2 }}>
-                        {rule.catch_and_release_only
-                          ? <span style={{ color: '#d97706', fontWeight: 500 }}>Catch & release only</span>
-                          : <span>Bag limit: {rule.bag_limit ?? '—'}</span>
-                        }
-                        {rule.size_limit_inches && <span>Min size: {rule.size_limit_inches}"</span>}
-                        <span>Gear: {rule.gear_allowed?.join(', ') ?? '—'}</span>
-                        <span>Season: {formatDate(rule.season_open)} – {formatDate(rule.season_close)}</span>
-                        {rule.notes && <span style={{ color: '#94a3b8', fontStyle: 'italic' }}>{rule.notes}</span>}
-                      </div>
+              {fishingMode && !loadingRegs && nearestWaters.length > 0 && (
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 15, color: '#1e293b', marginBottom: 2 }}>
+                    {nearestWaters[0].name}
+                  </div>
+                  <div style={{ fontSize: 12, color: '#64748b', textTransform: 'capitalize', marginBottom: 8 }}>
+                    {nearestWaters[0].type} — {nearestWaters[0].distance_meters ? `${Math.round(nearestWaters[0].distance_meters)}m away` : ''}
+                  </div>
+
+                  {nearestWaters.length > 1 && (
+                    <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 8 }}>
+                      Also nearby: {nearestWaters.slice(1).map(w => w.name).join(', ')}
                     </div>
-                  ))}
+                  )}
+
+                  {regulations.length === 0 && (
+                    <div style={{ fontSize: 12, color: '#475569', background: '#f1f5f9', borderRadius: 6, padding: '6px 8px' }}>
+                      No regulation data for this water yet
+                    </div>
+                  )}
+
+                  {regulations.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {regulations.map((rule, i) => (
+                        <div key={i} style={{
+                          background: rule.catch_and_release_only ? '#fef3c7' : '#f0fdf4',
+                          border: `1px solid ${rule.catch_and_release_only ? '#fcd34d' : '#86efac'}`,
+                          borderRadius: 8, padding: '8px 10px'
+                        }}>
+                          <div style={{ fontWeight: 600, fontSize: 13, color: '#1e293b', marginBottom: 4 }}>
+                            {rule.species}
+                          </div>
+                          <div style={{ fontSize: 12, color: '#475569', display: 'flex', flexDirection: 'column', gap: 2 }}>
+                            {rule.catch_and_release_only
+                              ? <span style={{ color: '#d97706', fontWeight: 500 }}>Catch & release only</span>
+                              : <span>Bag limit: {rule.bag_limit ?? '—'}</span>
+                            }
+                            {rule.size_limit_inches && <span>Min size: {rule.size_limit_inches}"</span>}
+                            <span>Gear: {rule.gear_allowed?.join(', ') ?? '—'}</span>
+                            <span>Season: {formatDate(rule.season_open)} — {formatDate(rule.season_close)}</span>
+                            {rule.notes && <span style={{ color: '#94a3b8', fontStyle: 'italic' }}>{rule.notes}</span>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
