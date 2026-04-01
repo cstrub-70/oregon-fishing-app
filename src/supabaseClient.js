@@ -6,36 +6,17 @@ const supabaseAnonKey = process.env.REACT_APP_SUPABASE_ANON_KEY;
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export async function fetchNearestWaterBody(lat, lng) {
-  const degRadius = 0.05;
-  const minLat = lat - degRadius;
-  const maxLat = lat + degRadius;
-  const minLng = lng - degRadius;
-  const maxLng = lng + degRadius;
+  const response = await fetch(
+    `https://oregon-fishing-app-production.up.railway.app/nearest-water?lat=${lat}&lng=${lng}`
+  );
 
-  const bbox = `POLYGON((${minLng} ${minLat}, ${maxLng} ${minLat}, ${maxLng} ${maxLat}, ${minLng} ${maxLat}, ${minLng} ${minLat}))`;
-
-  const { data, error } = await supabase
-    .from('water_bodies')
-    .select('id, name, type')
-    .not('name', 'is', null)
-    .filter('geometry', 'st_intersects', `SRID=4326;${bbox}`)
-    .limit(10);
-
-  if (error) {
-    console.error('Supabase error:', JSON.stringify(error));
+  if (!response.ok) {
+    console.error('Backend error:', response.status);
     return [];
   }
 
-  if (!data || data.length === 0) return [];
-
-  const sorted = data
-    .map(w => ({
-      ...w,
-      distance_meters: null
-    }))
-    .slice(0, 5);
-
-  return sorted;
+  const data = await response.json();
+  return data || [];
 }
 
 export async function fetchRegulationsForWater(waterBodyName) {
