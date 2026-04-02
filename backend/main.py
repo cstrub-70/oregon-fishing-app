@@ -42,13 +42,15 @@ def nearest_water(lat: float, lng: float, radius: float = 2000):
     rows = cur.fetchall()
 
     # Step 2: Find nearest water body whose name appears in a reg_section
-    # description — this is self-maintaining as new zones/sections are added.
-    # Search within 15km to cover tributaries far from their parent river.
-    # Excludes zone-wide general fallback section.
-    # Returns the single closest named match so frontend can use it as
-    # a parent river fallback if the clicked water has no specific data.
+    # description. This is self-maintaining — as new zones/sections are added,
+    # those river names automatically become eligible parent matches.
+    # 
+    # Uses 25km radius to cover tributaries far from their parent river.
+    # Excludes zone-wide general fallback section and lake/pond sections
+    # to avoid matching e.g. "Round Lake Collawash River" as a parent river.
+    # Orders by distance so the most relevant parent is returned first.
     cur.execute("""
-        SELECT wb.id, wb.name, wb.type,
+        SELECT DISTINCT ON (wb.name) wb.id, wb.name, wb.type,
           ST_Distance(
             wb.geometry::geography,
             ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography
@@ -58,14 +60,17 @@ def nearest_water(lat: float, lng: float, radius: float = 2000):
         AND ST_DWithin(
           wb.geometry::geography,
           ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography,
-          15000
+          25000
         )
         AND EXISTS (
           SELECT 1 FROM reg_sections rs
           WHERE rs.description ILIKE '%%' || wb.name || '%%'
           AND rs.description NOT ILIKE '%%General Regulations%%'
+          AND rs.description NOT ILIKE '%%Lake%%'
+          AND rs.description NOT ILIKE '%%Reservoir%%'
+          AND rs.description NOT ILIKE '%%Pond%%'
         )
-        ORDER BY distance_meters ASC
+        ORDER BY wb.name, distance_meters ASC
         LIMIT 1
     """, (lng, lat, lng, lat))
     parent = cur.fetchone()
