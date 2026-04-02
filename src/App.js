@@ -6,6 +6,175 @@ import { fetchNearestWaterBody, fetchRegulationsForWater } from './supabaseClien
 
 mapboxgl.accessToken = process.env.REACT_APP_MAPBOX_TOKEN;
 
+// Determine card type from rule data
+function getRuleStatus(rule) {
+  if (rule.bag_limit === 0 && !rule.catch_and_release_only) return 'closed';
+  if (rule.catch_and_release_only) return 'restricted';
+  return 'open';
+}
+
+const STATUS_CONFIG = {
+  open: {
+    bg: '#f0fdf4',
+    border: '#86efac',
+    headerBg: '#16a34a',
+    headerText: '#ffffff',
+    badge: 'OPEN',
+    badgeBg: 'rgba(255,255,255,0.25)',
+  },
+  restricted: {
+    bg: '#fefce8',
+    border: '#fde047',
+    headerBg: '#ca8a04',
+    headerText: '#ffffff',
+    badge: 'C&R ONLY',
+    badgeBg: 'rgba(255,255,255,0.25)',
+  },
+  closed: {
+    bg: '#fef2f2',
+    border: '#fca5a5',
+    headerBg: '#dc2626',
+    headerText: '#ffffff',
+    badge: 'CLOSED',
+    badgeBg: 'rgba(255,255,255,0.25)',
+  },
+};
+
+function RegulationCard({ rule }) {
+  const status = getRuleStatus(rule);
+  const config = STATUS_CONFIG[status];
+
+  // Default: open cards expanded, closed/restricted collapsed
+  const [expanded, setExpanded] = useState(status === 'open');
+
+  const formatDate = (dateStr) => {
+    if (!dateStr) return null;
+    return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  };
+
+  const openDate = formatDate(rule.season_open);
+  const closeDate = formatDate(rule.season_close);
+  const seasonText = openDate && closeDate ? `${openDate} – ${closeDate}` : 'Open all year';
+
+  return (
+    <div style={{
+      background: config.bg,
+      border: `1px solid ${config.border}`,
+      borderRadius: 10,
+      overflow: 'hidden',
+      fontFamily: 'sans-serif',
+    }}>
+      {/* Clickable header */}
+      <div
+        onClick={() => setExpanded(e => !e)}
+        style={{
+          background: config.headerBg,
+          padding: '7px 10px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          cursor: 'pointer',
+          userSelect: 'none',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+          <span style={{
+            fontSize: 12,
+            fontWeight: 700,
+            color: config.headerText,
+            letterSpacing: 0.1,
+          }}>
+            {rule.species}
+          </span>
+          <span style={{
+            fontSize: 10,
+            fontWeight: 700,
+            color: config.headerText,
+            background: config.badgeBg,
+            borderRadius: 4,
+            padding: '1px 5px',
+            letterSpacing: 0.5,
+          }}>
+            {config.badge}
+          </span>
+        </div>
+        <span style={{
+          color: config.headerText,
+          fontSize: 14,
+          lineHeight: 1,
+          transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)',
+          transition: 'transform 0.2s ease',
+          display: 'inline-block',
+        }}>
+          ▾
+        </span>
+      </div>
+
+      {/* Collapsible body */}
+      {expanded && (
+        <div style={{
+          padding: '8px 10px',
+          fontSize: 12,
+          color: '#374151',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 4,
+        }}>
+          {/* Season */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ color: '#6b7280', fontWeight: 500 }}>Season</span>
+            <span style={{ fontWeight: 600, color: '#111827' }}>{seasonText}</span>
+          </div>
+
+          {/* Bag limit — only show if not closed and not C&R */}
+          {status === 'open' && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ color: '#6b7280', fontWeight: 500 }}>Bag limit</span>
+              <span style={{ fontWeight: 600, color: '#111827' }}>
+                {rule.bag_limit != null ? rule.bag_limit : 'No limit'}
+              </span>
+            </div>
+          )}
+
+          {/* Size limit */}
+          {rule.size_limit_inches && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ color: '#6b7280', fontWeight: 500 }}>Min size</span>
+              <span style={{ fontWeight: 600, color: '#111827' }}>{rule.size_limit_inches}"</span>
+            </div>
+          )}
+
+          {/* Gear */}
+          {rule.gear_allowed?.length > 0 && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ color: '#6b7280', fontWeight: 500 }}>Gear</span>
+              <span style={{ fontWeight: 600, color: '#111827', textAlign: 'right', maxWidth: '55%' }}>
+                {rule.gear_allowed.join(', ')}
+              </span>
+            </div>
+          )}
+
+          {/* Divider before notes */}
+          {rule.notes && (
+            <>
+              <div style={{ borderTop: `1px solid ${config.border}`, margin: '4px 0' }} />
+              <p style={{
+                margin: 0,
+                color: '#6b7280',
+                fontStyle: 'italic',
+                fontSize: 11,
+                lineHeight: 1.5,
+              }}>
+                {rule.notes}
+              </p>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [fishingMode, setFishingMode] = useState(false);
   const [popupInfo, setPopupInfo] = useState(null);
@@ -36,10 +205,11 @@ export default function App() {
     setRegulations([]);
 
     const waters = await fetchNearestWaterBody(lat, lng);
+    console.log('Waters from backend:', JSON.stringify(waters));
     setNearestWaters(waters);
 
     if (waters.length > 0) {
-      const regs = await fetchRegulationsForWater(waters[0].name);
+      const regs = await fetchRegulationsForWater(waters[0].name, waters);
       setRegulations(regs);
     }
 
@@ -101,11 +271,6 @@ export default function App() {
     }
   };
 
-  const formatDate = (dateStr) => {
-    if (!dateStr) return '—';
-    return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-  };
-
   return (
     <div style={{ width: '100vw', height: '100vh', position: 'relative' }}>
 
@@ -137,6 +302,7 @@ export default function App() {
         </div>
       )}
 
+      {/* Fishing mode toggle */}
       <div
         onClick={() => setFishingMode(m => !m)}
         style={{
@@ -157,6 +323,7 @@ export default function App() {
         {fishingMode ? 'Fishing mode: ON' : 'Fishing mode: OFF'}
       </div>
 
+      {/* Legend */}
       {fishingMode && (
         <div style={{
           position: 'absolute', top: 64, left: 16, zIndex: 10,
@@ -169,7 +336,7 @@ export default function App() {
           {[
             { color: '#16a34a', label: 'Open' },
             { color: '#dc2626', label: 'Closed' },
-            { color: '#f59e0b', label: 'Restricted' },
+            { color: '#ca8a04', label: 'C&R Only' },
             { color: '#94a3b8', label: 'No data yet' },
           ].map(({ color, label }) => (
             <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -206,9 +373,9 @@ export default function App() {
               setRegulations([]);
             }}
             closeOnClick={false}
-            maxWidth="320px"
+            maxWidth="340px"
           >
-            <div style={{ padding: '8px', fontFamily: 'sans-serif', minWidth: 200 }}>
+            <div style={{ padding: '8px', fontFamily: 'sans-serif', minWidth: 220 }}>
 
               {!fishingMode && (
                 <div style={{ fontSize: 12, color: '#475569' }}>
@@ -230,6 +397,7 @@ export default function App() {
 
               {fishingMode && !loadingRegs && nearestWaters.length > 0 && (
                 <div>
+                  {/* Water body header */}
                   <div style={{ fontWeight: 700, fontSize: 15, color: '#1e293b', marginBottom: 2 }}>
                     {nearestWaters[0].name}
                   </div>
@@ -238,7 +406,7 @@ export default function App() {
                   </div>
 
                   {nearestWaters.length > 1 && (
-                    <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 8 }}>
+                    <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 10 }}>
                       Also nearby: {nearestWaters.slice(1).map(w => w.name).join(', ')}
                     </div>
                   )}
@@ -249,30 +417,16 @@ export default function App() {
                     </div>
                   )}
 
+                  {/* Expand/collapse all */}
                   {regulations.length > 0 && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      {regulations.map((rule, i) => (
-                        <div key={i} style={{
-                          background: rule.catch_and_release_only ? '#fef3c7' : '#f0fdf4',
-                          border: `1px solid ${rule.catch_and_release_only ? '#fcd34d' : '#86efac'}`,
-                          borderRadius: 8, padding: '8px 10px'
-                        }}>
-                          <div style={{ fontWeight: 600, fontSize: 13, color: '#1e293b', marginBottom: 4 }}>
-                            {rule.species}
-                          </div>
-                          <div style={{ fontSize: 12, color: '#475569', display: 'flex', flexDirection: 'column', gap: 2 }}>
-                            {rule.catch_and_release_only
-                              ? <span style={{ color: '#d97706', fontWeight: 500 }}>Catch & release only</span>
-                              : <span>Bag limit: {rule.bag_limit ?? '—'}</span>
-                            }
-                            {rule.size_limit_inches && <span>Min size: {rule.size_limit_inches}"</span>}
-                            <span>Gear: {rule.gear_allowed?.join(', ') ?? '—'}</span>
-                            <span>Season: {formatDate(rule.season_open)} — {formatDate(rule.season_close)}</span>
-                            {rule.notes && <span style={{ color: '#94a3b8', fontStyle: 'italic' }}>{rule.notes}</span>}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
+                    <>
+                      <ExpandCollapseAll regulations={regulations} />
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+                        {regulations.map((rule, i) => (
+                          <RegulationCard key={i} rule={rule} />
+                        ))}
+                      </div>
+                    </>
                   )}
                 </div>
               )}
@@ -280,6 +434,26 @@ export default function App() {
           </Popup>
         )}
       </Map>
+    </div>
+  );
+}
+
+// Small helper to expand/collapse all cards at once
+// Uses a key trick to remount all cards with a new default state
+function ExpandCollapseAll({ regulations }) {
+  const allCount = regulations.length;
+  const openCount = regulations.filter(r => getRuleStatus(r) === 'open').length;
+
+  return (
+    <div style={{
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: 2,
+    }}>
+      <span style={{ fontSize: 11, color: '#94a3b8' }}>
+        {allCount} species · {openCount} open
+      </span>
     </div>
   );
 }
